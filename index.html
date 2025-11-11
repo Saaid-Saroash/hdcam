@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Grid Capture & Stitch — Camera Select + Auto Snap</title>
+<title>Grid Capture — Camera Select (Rear detection fix)</title>
 <style>
   :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
   body{margin:0;background:#071023;color:#E6F2F7;display:flex;flex-direction:column;align-items:center;padding:16px;gap:12px;}
@@ -28,7 +28,7 @@
 </style>
 </head>
 <body>
-  <h1>Grid Capture & Stitch</h1>
+  <h1>Grid Capture & Stitch — Rear Camera Fix</h1>
 
   <div class="topbar">
     <label class="small">Camera:
@@ -36,6 +36,7 @@
     </label>
     <button id="refreshDevices">Refresh</button>
     <button id="btnStart">Start</button>
+    <button id="btnTryRear">Try Rear (facingMode)</button>
     <button id="btnStop" class="danger" disabled>Stop</button>
   </div>
 
@@ -61,7 +62,6 @@
 
   <div class="stage" id="stage">
     <video id="preview" autoplay playsinline muted></video>
-    <!-- overlayGrid will be sized dynamically -->
     <div id="overlayContainer"></div>
   </div>
 
@@ -75,7 +75,7 @@
   <div style="width:92vw;max-width:720px;">
     <div id="thumbGrid" class="thumbs"></div>
     <canvas id="result"></canvas>
-    <div class="meta" id="status">Status: idle — choose grid and start camera</div>
+    <div class="meta" id="status">Status: idle — select camera and press Start</div>
   </div>
 
 <script>
@@ -84,6 +84,7 @@
 const cameraSelect = document.getElementById('cameraSelect');
 const refreshDevicesBtn = document.getElementById('refreshDevices');
 const btnStart = document.getElementById('btnStart');
+const btnTryRear = document.getElementById('btnTryRear');
 const btnStop = document.getElementById('btnStop');
 const stage = document.getElementById('stage');
 const preview = document.getElementById('preview');
@@ -104,44 +105,77 @@ const status = document.getElementById('status');
 
 let stream = null;
 let deviceList = [];
-let currentGrid = []; // array of ImageBitmap or null, length rows*cols
+let currentGrid = [];
 let lastBlobUrl = null;
-
 const supportsOffscreen = (typeof OffscreenCanvas !== 'undefined');
 
-// helpers
 function setStatus(s){ status.textContent = 'Status: ' + s; }
-function byId(id){ return document.getElementById(id); }
 
-async function enumerateVideoDevices(){
+//
+// FIXED device enumeration strategy:
+// 1) Ask for permission with a quick getUserMedia favoring environment to make device labels visible
+// 2) enumerateDevices()
+// 3) stop the temporary stream
+// 4) populate the select, prioritizing labels that look like rear cameras
+//
+async function enumerateVideoDevices(prefetchPermission=true){
   try{
+    // If labels are empty, browsers usually require a prior permission grant.
+    if(prefetchPermission){
+      try{
+        setStatus('Requesting temporary camera permission to reveal device labels...');
+        const tempStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+        // stop immediately but keep permission granted
+        tempStream.getTracks().forEach(t => t.stop());
+      }catch(e){
+        // continue even if permission denied — enumeration may still show device ids but not labels
+        console.warn('Temporary permission failed:', e);
+      }
+    }
+
     const devices = await navigator.mediaDevices.enumerateDevices();
     deviceList = devices.filter(d => d.kind === 'videoinput');
     cameraSelect.innerHTML = '';
-    deviceList.forEach((d, i) => {
+    // heuristics: prefer labels containing these tokens as rear cameras
+    const rearTokens = ['back','rear','environment','wide','ultra','main','external'];
+    // build a prioritized list: first rear-like, then others
+    const prioritized = [...deviceList].sort((a,b)=>{
+      const la = (a.label||'').toLowerCase();
+      const lb = (b.label||'').toLowerCase();
+      const sa = rearTokens.some(t=>la.includes(t)) ? 0 : 1;
+      const sb = rearTokens.some(t=>lb.includes(t)) ? 0 : 1;
+      if(sa !== sb) return sa - sb;
+      // otherwise keep original order
+      return 0;
+    });
+    prioritized.forEach((d,i)=>{
       const opt = document.createElement('option');
       opt.value = d.deviceId;
-      // label fallback
       opt.textContent = d.label || `Camera ${i+1}`;
       cameraSelect.appendChild(opt);
     });
+    if(prioritized.length > 0){
+      cameraSelect.selectedIndex = 0;
+      setStatus(`Found ${prioritized.length} video input(s). Select camera or use Try Rear.`);
+    }else{
+      setStatus('No video input devices found.');
+    }
   }catch(e){
-    console.warn('enumerateDevices failed', e);
-    setStatus('Could not list cameras: ' + (e.message || e));
+    console.error('enumerateVideoDevices error', e);
+    setStatus('Error listing devices: ' + (e.message || e));
   }
 }
 
-async function startCamera(deviceId){
+async function startCamera(deviceId, useFacingMode=false){
   try{
     if(stream) stopCamera();
-    setStatus('Requesting camera — asking for environment/high-res');
-    const constraints = {
-      video: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 8000 },
-        height: { ideal: 6000 }
-      },
+    setStatus('Starting camera...');
+    // If useFacingMode true, prefer facingMode env without deviceId.
+    const constraints = useFacingMode ? {
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 8000 }, height: { ideal: 6000 } },
+      audio: false
+    } : {
+      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } },
       audio: false
     };
     stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -149,15 +183,20 @@ async function startCamera(deviceId){
     btnStop.disabled = false;
     btnStart.disabled = true;
     btnAuto.disabled = false;
-    setStatus('Camera started. Preview ready.');
+    setStatus('Camera started — preview ready.');
     preview.onloadedmetadata = () => {
       setStatus(`Preview ${preview.videoWidth}×${preview.videoHeight}. Grid: ${rowsInput.value}×${colsInput.value}`);
-      buildOverlay(); // build overlay after metadata sizes available
+      buildOverlay();
     };
   }catch(e){
-    console.error('startCamera', e);
-    setStatus('Camera error: ' + (e.message || e));
-    alert('Unable to access camera: ' + (e.message || e));
+    console.error('startCamera error', e);
+    // Helpful troubleshooting messages
+    let msg = e && e.name ? e.name + ': ' + (e.message||'') : (e.message || e);
+    if(e && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')){
+      msg = 'Requested camera not found. Try "Try Rear (facingMode)" or press Refresh.';
+    }
+    setStatus('Camera start failed: ' + msg);
+    alert('Unable to start camera: ' + msg);
   }
 }
 
@@ -173,17 +212,11 @@ function stopCamera(){
   }
 }
 
-refreshDevicesBtn.addEventListener('click', enumerateVideoDevices);
-cameraSelect.addEventListener('change', ()=>{ startCamera(cameraSelect.value); });
-btnStart.addEventListener('click', async ()=>{ await enumerateVideoDevices(); const id = cameraSelect.value || (deviceList[0] && deviceList[0].deviceId); await startCamera(id); });
-btnStop.addEventListener('click', stopCamera);
-
-// build overlay grid based on rows/cols
+// rest of grid/capture/combine logic (kept similar to earlier version)
 function buildOverlay(){
   overlayContainer.innerHTML = '';
   const rows = Math.max(1, Math.min(6, parseInt(rowsInput.value||2)));
   const cols = Math.max(1, Math.min(6, parseInt(colsInput.value||2)));
-  overlayContainer.style.pointerEvents = 'none';
   const overlay = document.createElement('div');
   overlay.className = 'overlayGrid';
   overlay.style.gridTemplateColumns = `repeat(${cols},1fr)`;
@@ -192,7 +225,6 @@ function buildOverlay(){
   overlay.style.inset = '0';
   overlay.style.zIndex = '2';
   overlay.style.pointerEvents = 'auto';
-  // create cells
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
       const cell = document.createElement('div');
@@ -200,7 +232,6 @@ function buildOverlay(){
       cell.dataset.r = r;
       cell.dataset.c = c;
       cell.textContent = `${r+1},${c+1}`;
-      // capture on click to allow manual capture per cell
       cell.addEventListener('click', async (ev)=>{
         ev.stopPropagation();
         await captureCell(r,c);
@@ -209,16 +240,13 @@ function buildOverlay(){
     }
   }
   overlayContainer.appendChild(overlay);
-  // prepare thumbnail grid layout
   prepareThumbGrid(rows, cols);
-  // reset currentGrid
   currentGrid = new Array(rows*cols).fill(null);
   btnCombine.disabled = true;
   btnDownload.disabled = true;
   btnClear.disabled = true;
 }
 
-// prepare thumbnails placeholders
 function prepareThumbGrid(rows, cols){
   thumbGrid.innerHTML = '';
   thumbGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
@@ -235,7 +263,27 @@ function prepareThumbGrid(rows, cols){
   }
 }
 
-// capture current video frame then crop to cell rectangle
+async function captureFrameBitmap(){
+  const track = stream.getVideoTracks()[0];
+  if(window.ImageCapture){
+    try{
+      const ic = new ImageCapture(track);
+      if(ic && ic.takePhoto){
+        const blob = await ic.takePhoto().catch(()=>null);
+        if(blob) return await createImageBitmap(blob);
+      }
+    }catch(e){ /* fallback */ }
+  }
+  const w = preview.videoWidth || 1280;
+  const h = preview.videoHeight || 720;
+  const c = supportsOffscreen ? new OffscreenCanvas(w,h) : document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(preview, 0,0, w,h);
+  if(supportsOffscreen) return await c.transferToImageBitmap();
+  return await new Promise(res=> c.toBlob(b=> createImageBitmap(b).then(res)));
+}
+
 async function captureCell(row, col){
   if(!stream){ alert('Start camera first'); return; }
   try{
@@ -248,27 +296,21 @@ async function captureCell(row, col){
     const cellH = Math.floor(h / rows);
     const sx = Math.floor(col * cellW);
     const sy = Math.floor(row * cellH);
-    // use offscreen or fallback canvas to crop
     const oc = supportsOffscreen ? new OffscreenCanvas(cellW, cellH) : document.createElement('canvas');
     oc.width = cellW; oc.height = cellH;
     const ctx = oc.getContext('2d');
     ctx.drawImage(bmp, sx, sy, cellW, cellH, 0, 0, cellW, cellH);
-    // create ImageBitmap if possible
     let cropped;
     if(supportsOffscreen){
       cropped = await oc.transferToImageBitmap();
     }else{
-      // fallback: convert to blob and createImageBitmap
       const blob = await new Promise(res=> oc.toBlob(res, 'image/png'));
       cropped = await createImageBitmap(blob);
     }
-    // store in currentGrid
     const idx = row * cols + col;
     currentGrid[idx] = cropped;
-    // show thumbnail
     showThumbAt(idx, cropped);
     setStatus(`Captured cell ${row+1},${col+1} (${cellW}×${cellH}).`);
-    // enable combine if all present
     if(currentGrid.every(x=>x)) { btnCombine.disabled = false; btnClear.disabled = false; }
     btnDownload.disabled = true;
   }catch(e){
@@ -277,35 +319,6 @@ async function captureCell(row, col){
   }
 }
 
-// capture a full-resolution frame as ImageBitmap
-async function captureFrameBitmap(){
-  // try ImageCapture API first if available
-  const track = stream.getVideoTracks()[0];
-  if(window.ImageCapture){
-    try{
-      const ic = new ImageCapture(track);
-      if(ic && ic.takePhoto) {
-        const blob = await ic.takePhoto().catch(()=>null);
-        if(blob){
-          return await createImageBitmap(blob);
-        }
-      }
-    }catch(err){
-      // ignore and fallback to drawing video frame
-    }
-  }
-  // fallback: draw video to canvas
-  const w = preview.videoWidth || 1280;
-  const h = preview.videoHeight || 720;
-  const c = supportsOffscreen ? new OffscreenCanvas(w,h) : document.createElement('canvas');
-  c.width = w; c.height = h;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(preview, 0,0, w,h);
-  if(supportsOffscreen) return await c.transferToImageBitmap();
-  return await new Promise(res=> c.toBlob(b=> createImageBitmap(b).then(res)));
-}
-
-// show thumbnail at index
 function showThumbAt(index, bitmap){
   const node = thumbGrid.children[index];
   node.innerHTML = '';
@@ -320,7 +333,6 @@ function showThumbAt(index, bitmap){
       const img = document.createElement('img');
       img.src = url;
       node.appendChild(img);
-      // revoke later? left for user session
     }).catch(e=>{ console.warn(e); });
   }else{
     const img = document.createElement('img');
@@ -329,7 +341,6 @@ function showThumbAt(index, bitmap){
   }
 }
 
-// Auto Snap sequence
 let autoAbort = false;
 btnAuto.addEventListener('click', async ()=>{
   if(!stream){ alert('Start camera first'); return; }
@@ -347,15 +358,11 @@ btnAuto.addEventListener('click', async ()=>{
   }
   setStatus('Auto snapping finished.');
 });
+btnAuto.addEventListener('dblclick', ()=>{ autoAbort = true; });
 
-btnAuto.addEventListener('dblclick', ()=>{ // double-click to abort
-  autoAbort = true;
-});
-
-// combine currentGrid into final image
 btnCombine.addEventListener('click', async ()=>{
   if(!currentGrid || currentGrid.some(x=>!x)){
-    alert('Capture all grid cells first (or re-run Auto Snap).');
+    alert('Capture all grid cells first.');
     return;
   }
   btnCombine.disabled = true;
@@ -364,7 +371,6 @@ btnCombine.addEventListener('click', async ()=>{
     const rows = Math.max(1, Math.min(6, parseInt(rowsInput.value||2)));
     const cols = Math.max(1, Math.min(6, parseInt(colsInput.value||2)));
     const upscale = Math.max(1, Math.min(4, parseFloat(upscaleInput.value||2)));
-    // assume each cell has same size
     const cellW = currentGrid[0].width;
     const cellH = currentGrid[0].height;
     const finalW = Math.round(cellW * cols * upscale);
@@ -374,7 +380,6 @@ btnCombine.addEventListener('click', async ()=>{
     const ctx = oc.getContext('2d');
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    // draw each cell scaled to its final position
     for(let r=0;r<rows;r++){
       for(let c=0;c<cols;c++){
         const idx = r*cols + c;
@@ -386,12 +391,10 @@ btnCombine.addEventListener('click', async ()=>{
         ctx.drawImage(bmp, 0,0, bmp.width, bmp.height, dx, dy, dw, dh);
       }
     }
-    // optional seam blend (very simple): if blend checked, draw small feather by drawing blurred seams
     if(blendCheckbox.checked){
       try{
         ctx.globalCompositeOperation = 'lighter';
         ctx.globalAlpha = 0.02;
-        // draw gentle pass to smooth seams
         for(let pass=0; pass<6; pass++){
           for(let r=0;r<rows;r++){
             for(let c=0;c<cols;c++){
@@ -407,30 +410,25 @@ btnCombine.addEventListener('click', async ()=>{
         }
         ctx.globalAlpha = 1.0;
         ctx.globalCompositeOperation = 'source-over';
-      }catch(e){ /* ignore if not supported */ }
+      }catch(e){ /* ignore */ }
     }
-    // draw output to visible canvas (fit)
     const maxDisplayW = Math.min(1024, finalW);
     const displayW = Math.min(maxDisplayW, Math.round(window.innerWidth * 0.92));
     const displayH = Math.round(displayW * finalH / finalW);
     resultCanvas.width = displayW; resultCanvas.height = displayH;
-    // create bitmap or use toDataURL
     if(supportsOffscreen){
       const bmp = await oc.transferToImageBitmap();
       resultCtx.clearRect(0,0,displayW,displayH);
       resultCtx.drawImage(bmp, 0,0, displayW, displayH);
-      // prepare blob for download
       const blob = await oc.convertToBlob({ type: 'image/png' });
       if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
       lastBlobUrl = URL.createObjectURL(blob);
       btnDownload.disabled = false;
     }else{
-      // oc is canvas element
       resultCtx.clearRect(0,0,displayW,displayH);
       resultCtx.drawImage(oc, 0,0, displayW, displayH);
       const dataUrl = oc.toDataURL('image/png');
       if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
-      // convert dataURL to blob and create url
       const blob = dataURLtoBlob(dataUrl);
       lastBlobUrl = URL.createObjectURL(blob);
       btnDownload.disabled = false;
@@ -444,7 +442,6 @@ btnCombine.addEventListener('click', async ()=>{
   }
 });
 
-// download
 btnDownload.addEventListener('click', ()=>{
   if(!lastBlobUrl){ alert('No combined image yet'); return; }
   const a = document.createElement('a');
@@ -453,11 +450,9 @@ btnDownload.addEventListener('click', ()=>{
   a.click();
 });
 
-// clear grid
 btnClear.addEventListener('click', ()=>{
   const len = currentGrid.length;
   for(let i=0;i<len;i++) currentGrid[i] = null;
-  // reset thumbs
   const rows = Math.max(1, Math.min(6, parseInt(rowsInput.value||2)));
   const cols = Math.max(1, Math.min(6, parseInt(colsInput.value||2)));
   for(let i=0;i<rows*cols;i++){
@@ -470,7 +465,6 @@ btnClear.addEventListener('click', ()=>{
   setStatus('Cleared captured cells.');
 });
 
-// helpers
 function dataURLtoBlob(dataurl){
   const arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1];
   const bstr = atob(arr[1]); let n = bstr.length; const u8arr = new Uint8Array(n);
@@ -478,19 +472,37 @@ function dataURLtoBlob(dataurl){
   return new Blob([u8arr], { type: mime });
 }
 
-// build overlay when grid inputs change
+// UI wiring
+refreshDevicesBtn.addEventListener('click', ()=> enumerateVideoDevices(true));
+cameraSelect.addEventListener('change', ()=> {
+  const id = cameraSelect.value;
+  if(id) startCamera(id, false);
+});
+btnStart.addEventListener('click', async ()=> {
+  await enumerateVideoDevices(true);
+  const id = cameraSelect.value || (deviceList[0] && deviceList[0].deviceId);
+  await startCamera(id, false);
+});
+btnStop.addEventListener('click', stopCamera);
+
+// Try Rear by facingMode — helpful when deviceId is not working
+btnTryRear.addEventListener('click', async ()=>{
+  await startCamera(null, true);
+});
+
+// grid re-build when inputs change
 rowsInput.addEventListener('change', buildOverlay);
 colsInput.addEventListener('change', buildOverlay);
 
-// initial setup
-await enumerateVideoDevices();
+// initial boot
+await enumerateVideoDevices(true);
 buildOverlay();
-setStatus('Ready — select camera and press Start. Click overlay cells to capture manually or use Auto Snap.');
+setStatus('Ready — select camera and press Start. If back camera not listed, press "Try Rear (facingMode)".');
 
-// cleanup
+// cleanup on unload
 window.addEventListener('beforeunload', ()=>{ if(stream) stream.getTracks().forEach(t=>t.stop()); });
 
-})(); // IIFE
+})(); // end IIFE
 </script>
 </body>
 </html>
