@@ -3,223 +3,417 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Camera Rear Detection — Test & Force Rear</title>
+<title>Camera Probe — enumerate & open every camera (try find 48MP)</title>
 <style>
-  body{font-family:system-ui,Segoe UI,Roboto,Arial;background:#071021;color:#e8f6ff;padding:12px;display:flex;flex-direction:column;gap:10px;align-items:center}
-  .card{background:#071827;border-radius:10px;padding:12px;max-width:920px;width:96%}
-  h2{margin:0 0 6px 0;font-size:16px}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  select,button,input{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:#06202a;color:#e6f6ff}
-  button{font-weight:700;cursor:pointer}
-  button:disabled{opacity:.45;cursor:not-allowed}
-  video{width:100%;max-width:560px;border-radius:8px;background:#000}
-  pre{background:#02121a;padding:8px;border-radius:6px;color:#9fd8e5;overflow:auto}
-  .small{font-size:13px;color:#9fb6c2}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#0b1220; color:#e6eef2; margin:0; padding:14px; display:flex; gap:12px; flex-direction:column; align-items:center;}
+  h1{margin:0 0 6px 0; font-size:18px}
+  .row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  button, select, input {padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.06); background:#06202a; color:#e6eef2; font-weight:600;}
+  button:disabled{opacity:.45; cursor:not-allowed}
+  .panel{width:95vw; max-width:980px; background:#071326; border-radius:10px; padding:12px; box-sizing:border-box;}
+  .devices{display:flex; gap:8px; flex-wrap:wrap;}
+  .devCard{background:#04131b; padding:8px; border-radius:8px; min-width:220px; box-sizing:border-box; border:1px solid rgba(255,255,255,0.03);}
+  video{width:100%; max-width:360px; border-radius:8px; background:#000}
+  canvas{max-width:360px;border-radius:8px;background:#000}
+  pre{white-space:pre-wrap; font-size:13px; color:#9fc2cf; margin:6px 0 0 0}
+  .small{font-size:13px; color:#9fb6c2}
+  .danger{background:#ef4444}
+  label{display:flex; gap:6px; align-items:center}
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .info{font-size:13px;color:#9fb6c2}
 </style>
 </head>
 <body>
-  <div class="card">
-    <h2>Rear camera detection & test</h2>
-    <div class="row" style="margin-bottom:8px;">
-      <button id="btnGrant">Grant Camera Permission (recommended)</button>
-      <button id="btnEnumerate">Refresh List</button>
-      <button id="btnDetect">Detect Rear by Testing Devices</button>
-      <button id="btnForceFacing">Start Using facingMode:environment</button>
-      <button id="btnStop" disabled>Stop Stream</button>
+  <h1>Camera Probe — enumerate & open every camera</h1>
+
+  <div class="panel">
+    <div class="row">
+      <button id="btnRequest">1) Request Permission</button>
+      <button id="btnEnumerate" disabled>2) Enumerate Devices</button>
+      <button id="btnProbeAll" disabled>3) Probe All Cameras (auto)</button>
+      <button id="btnStopAll" class="danger" disabled>Stop Current Stream</button>
     </div>
 
-    <div class="row" style="gap:10px;margin-bottom:8px;">
-      <label class="small">Available video inputs:</label>
-      <select id="deviceList" style="min-width:220px"></select>
-      <button id="btnStartSelected">Start Selected</button>
+    <div class="row" style="margin-top:8px;gap:6px;">
+      <label class="small">Choose camera:
+        <select id="cameraSelect" style="min-width:260px"></select>
+      </label>
+      <button id="btnOpenSelected" disabled>Open Selected</button>
+      <button id="btnOpenFacing" title="Open facingMode:environment">Open Rear (facingMode)</button>
     </div>
 
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <video id="preview" autoplay playsinline muted></video>
-      <div style="flex:1;min-width:220px">
-        <div class="small" id="status">Status: idle</div>
-        <pre id="log" style="height:220px">Log will appear here — use Detect Rear to test devices.</pre>
-      </div>
-    </div>
     <div style="margin-top:8px" class="small">
-      Tips: run on HTTPS / localhost. If you use iOS Safari it may not expose multiple deviceIds — use "Start Using facingMode:environment" or try Chrome on Android for better hardware selection.
+      <em>Tip:</em> If labels are blank, press <strong>Request Permission</strong> then <strong>Enumerate Devices</strong>. If rear camera still missing, press <strong>Open Rear (facingMode)</strong> or use <strong>Probe All Cameras</strong>.
     </div>
+  </div>
+
+  <div class="panel grid">
+    <div>
+      <h3 style="margin:0 0 8px 0">Live Preview</h3>
+      <video id="liveVideo" autoplay playsinline muted></video>
+      <div class="row" style="margin-top:8px; gap:8px;">
+        <label class="small">Request ideal W:
+          <input id="idealW" type="number" value="8000" style="width:110px"></label>
+        <label class="small">ideal H:
+          <input id="idealH" type="number" value="6000" style="width:110px"></label>
+      </div>
+      <div class="row" style="margin-top:8px; gap:8px;">
+        <button id="btnApplyConstraints" disabled>Apply Constraints</button>
+        <button id="btnTakePhoto" disabled>Try takePhoto()</button>
+      </div>
+      <div class="info" id="liveInfo">No stream</div>
+    </div>
+
+    <div>
+      <h3 style="margin:0 0 8px 0">Detected Devices & Probe Results</h3>
+      <div id="devicesList" class="devices"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin:0 0 8px 0">Probe log (each device tested)</h3>
+    <pre id="log" style="height:220px; overflow:auto; background:#03121a; padding:8px; border-radius:6px;"></pre>
   </div>
 
 <script>
 (async ()=>{
-const btnGrant = document.getElementById('btnGrant');
-const btnEnumerate = document.getElementById('btnEnumerate');
-const btnDetect = document.getElementById('btnDetect');
-const btnForceFacing = document.getElementById('btnForceFacing');
-const btnStop = document.getElementById('btnStop');
-const deviceList = document.getElementById('deviceList');
-const btnStartSelected = document.getElementById('btnStartSelected');
-const preview = document.getElementById('preview');
-const logEl = document.getElementById('log');
-const status = document.getElementById('status');
+  const btnRequest = document.getElementById('btnRequest');
+  const btnEnumerate = document.getElementById('btnEnumerate');
+  const btnProbeAll = document.getElementById('btnProbeAll');
+  const btnStopAll = document.getElementById('btnStopAll');
+  const cameraSelect = document.getElementById('cameraSelect');
+  const btnOpenSelected = document.getElementById('btnOpenSelected');
+  const btnOpenFacing = document.getElementById('btnOpenFacing');
+  const liveVideo = document.getElementById('liveVideo');
+  const devicesList = document.getElementById('devicesList');
+  const logEl = document.getElementById('log');
+  const liveInfo = document.getElementById('liveInfo');
+  const idealW = document.getElementById('idealW');
+  const idealH = document.getElementById('idealH');
+  const btnApplyConstraints = document.getElementById('btnApplyConstraints');
+  const btnTakePhoto = document.getElementById('btnTakePhoto');
 
-let lastStream = null;
-function log(...args){ logEl.textContent = new Date().toLocaleTimeString() + '  ' + args.join(' ') + '\n' + logEl.textContent; }
-function setStatus(t){ status.textContent = 'Status: ' + t; }
+  let currentStream = null;
+  let deviceList = [];
+  let probing = false;
 
-/* ensure permissions are requested so labels become visible */
-btnGrant.addEventListener('click', async ()=>{
-  try{
-    setStatus('Requesting camera permission...');
-    const s = await navigator.mediaDevices.getUserMedia({ video: true, audio:false });
-    s.getTracks().forEach(t=>t.stop());
-    setStatus('Permission granted (temporary). Now Refresh list.');
-    log('Temporary permission granted — device labels should now appear.');
-  }catch(e){
-    setStatus('Permission denied or error: ' + (e.message||e.name));
-    log('Permission error: ' + (e.message||e.name));
-    alert('Permission denied — allow camera in browser to list devices.');
+  function log(msg){
+    const time = new Date().toLocaleTimeString();
+    logEl.textContent = `[${time}] ${msg}\n` + logEl.textContent;
   }
-});
 
-/* enumerate videoinputs and prioritize likely rear labels */
-async function enumerateDevices(){
-  try{
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const vids = devices.filter(d=>d.kind==='videoinput');
-    deviceList.innerHTML = '';
-    const rearTokens = ['back','rear','environment','wide','main','ultra','tele','camera_0'];
-    // sort: rear-token first
-    vids.sort((a,b)=>{
-      const la = (a.label||'').toLowerCase(); const lb = (b.label||'').toLowerCase();
-      const sa = rearTokens.some(t=>la.includes(t)) ? 0 : 1;
-      const sb = rearTokens.some(t=>lb.includes(t)) ? 0 : 1;
-      return sa - sb;
-    });
-    vids.forEach((d,i)=> {
-      const opt = document.createElement('option');
-      opt.value = d.deviceId;
-      opt.textContent = d.label || `Camera ${i+1}`;
-      deviceList.appendChild(opt);
-    });
-    setStatus(`Found ${vids.length} video input(s).`);
-    log('Enumerated devices: ' + vids.map(v=>v.label || v.deviceId).join(' | '));
-  }catch(e){
-    setStatus('enumeration failed: ' + (e.message||e.name));
-    log('enumeration error: ' + (e.message||e.name));
-  }
-}
-btnEnumerate.addEventListener('click', ()=> enumerateDevices());
-
-/* utility: start a tiny stream with constraints and immediately stop (used for testing) */
-async function testDeviceId(deviceId, timeoutMs=3000){
-  // try to open deviceId-only stream (no facingMode) to inspect track settings/label
-  try{
-    const constraints = { video: { deviceId: { exact: deviceId } }, audio:false };
-    const s = await navigator.mediaDevices.getUserMedia(constraints);
-    const track = s.getVideoTracks()[0];
-    // read settings and label (label may still be empty on some browsers)
-    const settings = track.getSettings ? track.getSettings() : {};
-    const label = track.label || (s.active ? (s.getTracks()[0] && s.getTracks()[0].label) : '');
-    // facingMode might be available in settings
-    const facing = settings.facingMode || settings.deviceId ? settings.facingMode : undefined;
-    // stop quickly
-    s.getTracks().forEach(t=>t.stop());
-    return { ok:true, facing: facing || null, label: label || null, settings };
-  }catch(err){
-    return { ok:false, error: err && (err.name||err.message) || String(err) };
-  }
-}
-
-/* try each deviceId and report which one looks like rear */
-btnDetect.addEventListener('click', async ()=>{
-  setStatus('Detecting rear camera by testing each device — this may take a few seconds...');
-  log('--- Starting detection run ---');
-  await enumerateDevices(); // refresh list
-  const options = Array.from(deviceList.options).map(o=>({deviceId:o.value, label:o.text}));
-  if(!options.length){ setStatus('No video inputs found. Grant permission first.'); return; }
-  const rearTokens = ['back','rear','environment','wide','main','ultra','tele','camera_0'];
-  let found = null;
-  for(const opt of options){
-    setStatus('Testing device: ' + (opt.label || opt.deviceId));
-    log('Testing: ' + (opt.label || opt.deviceId));
-    // attempt test
-    const res = await testDeviceId(opt.deviceId);
-    if(!res.ok){
-      log(`Test failed for ${opt.label}: ${res.error}`);
-      continue;
-    }
-    log(`Test OK — facing:${res.facing} label:"${res.label}" settings:${JSON.stringify(res.settings)}`);
-    // heuristic: if settings.facingMode == 'environment' OR label contains rear token => choose it
-    const la = (res.label||'').toLowerCase();
-    if((res.facing && res.facing.toLowerCase().includes('environment')) || rearTokens.some(t=>la.includes(t))){
-      found = opt;
-      log('Selected as rear by heuristic: ' + (opt.label || opt.deviceId));
-      break;
+  // stop previous stream if any
+  function stopCurrentStream(){
+    if(currentStream){
+      try{ currentStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+      currentStream = null;
+      liveVideo.srcObject = null;
+      liveInfo.textContent = 'No stream';
+      btnStopAll.disabled = true;
+      btnApplyConstraints.disabled = true;
+      btnTakePhoto.disabled = true;
+      log('Stopped current stream');
     }
   }
-  if(found){
-    // fill select and start stream with that deviceId
-    deviceList.value = found.deviceId;
-    setStatus('Rear candidate found: ' + found.label + ' — starting it.');
-    log('Starting candidate device stream...');
-    await startStreamWithDevice(found.deviceId);
-  }else{
-    setStatus('No device identified confidently as rear. Use "Try Rear (facingMode)" to force environment camera.');
-    log('No rear candidate found. Try "Try Rear (facingMode)".');
+
+  // Request camera permission to reveal labels (some browsers hide labels until permission granted)
+  btnRequest.addEventListener('click', async ()=>{
+    try{
+      log('Requesting temporary permission (facingMode: environment)...');
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio:false });
+      s.getTracks().forEach(t => t.stop());
+      log('Permission granted (temporary stream opened then stopped)');
+      btnEnumerate.disabled = false;
+      await enumerateDevices();
+    }catch(e){
+      console.error(e);
+      alert('Permission request failed: ' + (e.message || e));
+      log('Permission request failed: ' + (e.message || e.name));
+      btnEnumerate.disabled = false; // still allow enumeration attempt
+    }
+  });
+
+  // enumerate devices and populate select and device cards
+  async function enumerateDevices(){
+    devicesList.innerHTML = '';
+    deviceList = [];
+    try{
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      deviceList = devices.filter(d => d.kind === 'videoinput');
+      if(!deviceList.length){
+        log('No videoinput devices found by enumerateDevices()');
+        cameraSelect.innerHTML = '<option value="">(no video inputs)</option>';
+        btnProbeAll.disabled = true;
+        return;
+      }
+      // sort/prioritize rear-like labels
+      const rearTokens = ['back','rear','environment','wide','main','tele','ultra','wide-angle'];
+      deviceList.sort((a,b)=>{
+        const la = (a.label||'').toLowerCase();
+        const lb = (b.label||'').toLowerCase();
+        const sa = rearTokens.some(t=>la.includes(t))?0:1;
+        const sb = rearTokens.some(t=>lb.includes(t))?0:1;
+        return sa - sb;
+      });
+      cameraSelect.innerHTML = '';
+      devicesList.innerHTML = '';
+      deviceList.forEach((d, idx)=>{
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `Camera ${idx+1} (label hidden)`;
+        cameraSelect.appendChild(opt);
+
+        const card = document.createElement('div');
+        card.className = 'devCard';
+        card.id = 'card-' + idx;
+        card.innerHTML = `<div style="font-weight:700; margin-bottom:6px">${d.label || '(label hidden)'}</div>
+                          <div class="small">deviceId: <code style="font-size:12px; color:#8fd2d5;">${d.deviceId}</code></div>
+                          <div id="probe-${idx}" class="small" style="margin-top:6px">not probed</div>`;
+        devicesList.appendChild(card);
+      });
+      btnEnumerate.disabled = false;
+      btnProbeAll.disabled = false;
+      btnOpenSelected.disabled = false;
+      log(`Found ${deviceList.length} videoinput(s).`);
+    }catch(e){
+      console.error(e);
+      alert('enumerateDevices failed: ' + (e.message || e));
+      log('enumerateDevices failed: ' + (e.message || e.name));
+    }
   }
-});
 
-/* start stream for a chosen deviceId (keeps it open in preview) */
-async function startStreamWithDevice(deviceId){
-  try{
-    if(lastStream){ lastStream.getTracks().forEach(t=>t.stop()); lastStream=null; preview.srcObject=null; }
-    setStatus('Opening device: ' + deviceId);
-    const s = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId }, width: { ideal: 4000 }, height: { ideal: 3000 } }, audio:false });
-    lastStream = s;
-    preview.srcObject = s;
-    btnStop.disabled = false;
-    log('Stream started for deviceId: ' + deviceId);
-  }catch(e){
-    log('Failed to open device stream: ' + (e && (e.name||e.message) || e));
-    setStatus('Stream failed: ' + (e && (e.name||e.message) || e));
-    alert('Could not open selected camera. Try "Try Rear (facingMode)" or refresh devices.');
+  btnEnumerate.addEventListener('click', enumerateDevices);
+
+  // open device for live preview
+  async function openDevice(deviceId, useFacingMode=false){
+    try{
+      stopCurrentStream();
+      liveInfo.textContent = 'Opening stream...';
+      const constraints = useFacingMode ? { video: { facingMode: { ideal:'environment' }, width:{ideal: parseInt(idealW.value)||8000}, height:{ideal: parseInt(idealH.value)||6000} } } :
+        { video: { deviceId: { exact: deviceId }, width:{ideal: parseInt(idealW.value)||8000}, height:{ideal: parseInt(idealH.value)||6000} } };
+      const s = await navigator.mediaDevices.getUserMedia(constraints);
+      currentStream = s;
+      liveVideo.srcObject = s;
+      btnStopAll.disabled = false;
+      btnApplyConstraints.disabled = false;
+      btnTakePhoto.disabled = !!window.ImageCapture;
+      const track = s.getVideoTracks()[0];
+      // show settings & capabilities
+      const settings = track.getSettings ? track.getSettings() : {};
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      liveInfo.innerHTML = `Active — settings: <code>${JSON.stringify(settings)}</code><br/>capabilities: <code>${JSON.stringify(caps)}</code>`;
+      log(`Opened device: ${deviceId || '(facingMode env)'} — settings: ${JSON.stringify(settings)}`);
+      // attach loadedmetadata listener to show actual resolution
+      liveVideo.onloadedmetadata = ()=> {
+        const vw = liveVideo.videoWidth, vh = liveVideo.videoHeight;
+        liveInfo.innerHTML = `Preview size: ${vw}×${vh}<br/>settings: <code>${JSON.stringify(track.getSettings ? track.getSettings() : {})}</code><br/>capabilities: <code>${JSON.stringify(caps)}</code>`;
+        log(`Preview reported size: ${vw}×${vh}`);
+      };
+      return {stream: s, track};
+    }catch(e){
+      console.error(e);
+      log('Open device failed: ' + (e.message||e.name));
+      throw e;
+    }
   }
-}
 
-/* Start selected device from dropdown */
-btnStartSelected.addEventListener('click', async ()=>{
-  const id = deviceList.value;
-  if(!id){ alert('No device selected'); return; }
-  await startStreamWithDevice(id);
-});
+  btnOpenSelected.addEventListener('click', async ()=>{
+    const id = cameraSelect.value;
+    if(!id){ alert('No device selected'); return; }
+    try{
+      await openDevice(id, false);
+    }catch(e){}
+  });
 
-/* Start using facingMode:environment (fallback) */
-btnForceFacing.addEventListener('click', async ()=>{
-  try{
-    if(lastStream){ lastStream.getTracks().forEach(t=>t.stop()); lastStream=null; preview.srcObject=null; }
-    setStatus('Starting camera with facingMode: environment (fallback)');
-    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width:{ ideal: 4000 }, height:{ ideal: 3000 } }, audio:false });
-    lastStream = s;
-    preview.srcObject = s;
-    btnStop.disabled = false;
-    log('Started stream with facingMode: environment. Note: some browsers ignore facingMode.');
-  }catch(e){
-    log('facingMode start failed: ' + (e && (e.name||e.message) || e));
-    setStatus('facingMode request failed: ' + (e && (e.name||e.message) || e));
-    alert('Could not start environment-facing stream. Your browser may limit camera selection (iOS Safari is known to do this). Try Chrome on Android if possible.');
-  }
-});
+  btnOpenFacing.addEventListener('click', async ()=>{
+    try{
+      await openDevice(null, true);
+    }catch(e){}
+  });
 
-/* Stop */
-btnStop.addEventListener('click', ()=>{
-  if(lastStream) lastStream.getTracks().forEach(t=>t.stop());
-  lastStream = null;
-  preview.srcObject = null;
-  btnStop.disabled = true;
-  setStatus('Stream stopped');
-  log('Stream stopped by user.');
-});
+  btnStopAll.addEventListener('click', stopCurrentStream);
 
-/* initial enumeration */
-await enumerateDevices();
-setStatus('Ready. Press "Grant Camera Permission" if rear camera still not listed.');
+  // apply arbitrary constraints to active track (e.g., try to force resolution or zoom)
+  btnApplyConstraints.addEventListener('click', async ()=>{
+    if(!currentStream){ alert('No active stream'); return; }
+    const track = currentStream.getVideoTracks()[0];
+    const constraints = {};
+    const w = parseInt(idealW.value);
+    const h = parseInt(idealH.value);
+    if(w) constraints.width = { ideal: w };
+    if(h) constraints.height = { ideal: h };
+    // attempt parse zoom if provided in UI? (Not shown by default)
+    try{
+      await track.applyConstraints(constraints);
+      const settings = track.getSettings ? track.getSettings() : {};
+      liveInfo.innerHTML = `Applied constraints. settings: <code>${JSON.stringify(settings)}</code>`;
+      log('Applied constraints: ' + JSON.stringify(constraints) + ' => ' + JSON.stringify(settings));
+    }catch(e){
+      console.error(e);
+      log('applyConstraints failed: ' + (e.message || e.name));
+      alert('applyConstraints failed: ' + (e.message || e.name));
+    }
+  });
+
+  // try ImageCapture.takePhoto() to get actual captured photo (may be higher resolution than video)
+  btnTakePhoto.addEventListener('click', async ()=>{
+    if(!currentStream){ alert('No active stream'); return; }
+    const track = currentStream.getVideoTracks()[0];
+    if(!('ImageCapture' in window)){
+      alert('ImageCapture API not supported in this browser.');
+      return;
+    }
+    try{
+      const ic = new ImageCapture(track);
+      if(!ic.takePhoto){
+        alert('takePhoto() not supported; try createImageBitmap from canvas instead.');
+        return;
+      }
+      log('Calling ImageCapture.takePhoto() — this may return the full photo resolution if supported...');
+      const blob = await ic.takePhoto();
+      const bmp = await createImageBitmap(blob);
+      // show in small preview canvas
+      const c = document.createElement('canvas');
+      c.width = Math.min(bmp.width, 1200);
+      c.height = Math.round(c.width * bmp.height / bmp.width);
+      const ctx = c.getContext('2d');
+      ctx.drawImage(bmp, 0,0, c.width, c.height);
+      // attach to dom under live preview
+      let prev = document.getElementById('photoPreview');
+      if(!prev){
+        prev = document.createElement('div');
+        prev.id = 'photoPreview';
+        prev.style.marginTop = '8px';
+        liveVideo.parentNode.appendChild(prev);
+      }
+      prev.innerHTML = `<div class="small">Captured photo: ${bmp.width}×${bmp.height}, size ${Math.round(blob.size/1024)}KB</div>`;
+      prev.appendChild(c);
+      log(`takePhoto result: ${bmp.width}×${bmp.height}, blob ${blob.size} bytes`);
+      // prepare download link
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `photo_${bmp.width}x${bmp.height}.jpg`;
+      a.textContent = 'Download photo';
+      a.style.display = 'inline-block';
+      a.style.marginTop = '4px';
+      prev.appendChild(a);
+    }catch(e){
+      console.error(e);
+      log('takePhoto failed: ' + (e.message || e.name));
+      alert('takePhoto failed: ' + (e.message || e.name));
+    }
+  });
+
+  // Probe all cameras sequentially: try to open each deviceId with very large ideal resolution,
+  // report preview size, try takePhoto if possible, then stop stream and continue.
+  btnProbeAll.addEventListener('click', async ()=>{
+    if(!deviceList.length){
+      alert('No devices enumerated — press Enumerate Devices first.');
+      return;
+    }
+    if(probing){ log('Already probing'); return; }
+    probing = true;
+    btnProbeAll.disabled = true;
+    log('Starting probe of all cameras... (this will open and close each camera; permission prompts should be suppressed after first grant)');
+    for(let i=0;i<deviceList.length;i++){
+      const d = deviceList[i];
+      const cardProbe = document.getElementById('probe-' + i);
+      cardProbe.textContent = 'probing...';
+      try{
+        // stop any existing stream
+        stopCurrentStream();
+        // open device with exact deviceId and very high ideal resolution
+        const constraints = { video: { deviceId: { exact: d.deviceId }, width:{ ideal: parseInt(idealW.value)||8000 }, height:{ ideal: parseInt(idealH.value)||6000 } }, audio:false };
+        let s;
+        try{
+          s = await navigator.mediaDevices.getUserMedia(constraints);
+        }catch(openErr){
+          // fallback to facingMode environment if direct deviceId fails
+          log(`open deviceId ${d.deviceId} failed: ${openErr.message} — trying facingMode fallback`);
+          try{
+            s = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal: 'environment' }, width:{ ideal: parseInt(idealW.value)||8000 }, height:{ ideal: parseInt(idealH.value)||6000 } }, audio:false });
+          }catch(e2){
+            throw openErr; // keep original error
+          }
+        }
+        // show a tiny preview and read metadata
+        currentStream = s;
+        const track = s.getVideoTracks()[0];
+        // small hidden video to attach to DOM to get metadata
+        const tiny = document.createElement('video');
+        tiny.style.width = '160px';
+        tiny.style.height = 'auto';
+        tiny.autoplay = true;
+        tiny.playsInline = true;
+        tiny.muted = true;
+        tiny.srcObject = s;
+        // append a small element into the card
+        cardProbe.appendChild(tiny);
+        await new Promise(r => tiny.onloadedmetadata = r);
+        const vw = tiny.videoWidth || (track.getSettings && track.getSettings().width) || 0;
+        const vh = tiny.videoHeight || (track.getSettings && track.getSettings().height) || 0;
+        let info = `preview ${vw}×${vh}`;
+        // show capabilities and settings if available
+        try{
+          const caps = track.getCapabilities ? track.getCapabilities() : null;
+          const settings = track.getSettings ? track.getSettings() : null;
+          info += `; settings: ${JSON.stringify(settings)}; capabilities keys: ${caps ? Object.keys(caps).join(',') : 'n/a'}`;
+        }catch(e){ /* ignore */ }
+        log(`Device ${i+1}/${deviceList.length}: ${d.label || '(hidden)'} -> ${info}`);
+        cardProbe.textContent = info;
+        // try ImageCapture.takePhoto if supported
+        if('ImageCapture' in window){
+          try{
+            const ic = new ImageCapture(track);
+            if(ic.takePhoto){
+              cardProbe.textContent += ' — taking photo...';
+              log('Attempting takePhoto() for device ' + (d.label||d.deviceId));
+              const blob = await ic.takePhoto();
+              const bmp = await createImageBitmap(blob);
+              cardProbe.textContent += `; photo ${bmp.width}×${bmp.height} (${Math.round(blob.size/1024)}KB)`;
+              // small canvas preview appended
+              const c = document.createElement('canvas');
+              c.width = Math.min(240, bmp.width);
+              c.height = Math.round(c.width * bmp.height / bmp.width);
+              c.getContext('2d').drawImage(bmp, 0,0, c.width, c.height);
+              cardProbe.appendChild(c);
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = `probe_photo_${i+1}_${bmp.width}x${bmp.height}.jpg`;
+              a.textContent = 'Download photo';
+              a.style.display = 'block';
+              a.style.marginTop = '6px';
+              cardProbe.appendChild(a);
+              log(`takePhoto() returned ${bmp.width}×${bmp.height} for device ${i+1}`);
+            }else{
+              log('ImageCapture exists but takePhoto not supported on this track.');
+            }
+          }catch(photoErr){
+            console.warn('takePhoto failed:', photoErr);
+            cardProbe.textContent += `; takePhoto failed: ${photoErr.name||photoErr.message}`;
+            log(`takePhoto failed for device ${i+1}: ${photoErr.message || photoErr.name}`);
+          }
+        }
+        // stop probe stream
+        try{ s.getTracks().forEach(t=>t.stop()); }catch(e){}
+      }catch(e){
+        console.error('Probe error', e);
+        cardProbe.textContent = 'probe error: ' + (e.message || e.name);
+        log('Probe error: ' + (e.message || e.name));
+      }
+      // small delay before next to let camera hardware settle
+      await new Promise(r => setTimeout(r, 700));
+    }
+    probing = false;
+    btnProbeAll.disabled = false;
+    log('Probe completed for all devices.');
+    alert('Probe finished — check the cards and log for results.');
+  });
+
+  btnProbeAll.disabled = false;
+
+  // initial enumerate attempt on load (if permission previously granted, labels may already show)
+  try{ await enumerateDevices(); }catch(e){}
 })();
 </script>
 </body>
